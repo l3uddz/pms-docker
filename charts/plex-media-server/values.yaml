@@ -1,41 +1,103 @@
-# Default values for pms-chart.
-# This is a YAML-formatted file.
-# Declare variables to be passed into your templates.
-
-# The docker image information for the pms application
-
+# -- The docker image information for the pms application
 image:
+  # -- The public dockerhub registry
   registry: index.docker.io
   repository: plexinc/pms-docker
-  # If unset use "latest"
-  tag: "latest"
+  # renovate: datasource=custom.plex depName=plex versioning=loose
+  tag: "1.43.3.10896-cb3ebc72d"
   sha: ""
   pullPolicy: IfNotPresent
 
 global:
-  # Allow parent charts to override registry hostname
+  # -- Allow parent charts to override registry hostname
   imageRegistry: ""
 
+# -- Optional DNS configuration for the Pod
+dnsConfig: {}
+
+# -- Specifies the Pod's DNS policy. Default is typically 'ClusterFirst'.
+#    If 'hostNetwork: true' is used, you may need to set this to 'ClusterFirstWithHostNet'.
+#    Allowed values are ClusterFirst, Default, None, or ClusterFirstWithHostNet.
+dnsPolicy: ""
+
+# -- Set to true to run the Pod in the host's network namespace.
+#    This may be required for specific networking setups or accessing local resources.
+hostNetwork: false
+
 ingress:
-  # Specify if an ingress resource for the pms server should be created or not
+  # -- Specify if an ingress resource for the pms server should be created or not
   enabled: false
 
-  # The ingress class that should be used
+  # -- The ingress class that should be used
   ingressClassName: "ingress-nginx"
 
-  # The url to use for the ingress reverse proxy to point at this pms instance
+  # -- The url to use for the ingress reverse proxy to point at this pms instance
   url: ""
 
-  # Custom annotations to put on the ingress resource
+  # -- Optional TLS configuration to provide valid https connections
+  # using an existing SSL certificate
+  tls: []
+  #   - hosts:
+  #       - plex.example.com
+  #     secretName: cert-example-com
+
+  # -- Custom annotations to put on the ingress resource
   annotations: {}
 
+httpRoute:
+  # -- Specify if an HTTPRoute resource for the pms server should be created or not
+  enabled: false
+
+  # -- Gateway API parent references (required when enabled)
+  # @default -- `[]`
+  parentRefs: []
+  #   - name: my-gateway
+  #     namespace: gateway-namespace
+  #     sectionName: https
+
+  # -- Hostnames to match for the HTTPRoute
+  # @default -- `[]`
+  hostnames: []
+  #   - plex.example.com
+
+  # -- Custom annotations to put on the HTTPRoute resource
+  annotations: {}
+
+  # -- Custom labels to put on the HTTPRoute resource
+  labels: {}
+
 pms:
-  # The storage class to use when provisioning the pms config volume
+  # -- The storage class to use when provisioning the pms config volume
   # this needs to be created manually, null will use the default
   storageClassName: null
 
-  # the volume size to provision for the PMS database
+  # -- The volume size to provision for the PMS database
   configStorage: 2Gi
+
+  # -- Name of an existing `PersistentVolumeClaim` for the PMS database
+  # NOTE: When set, 'configStorage' and 'storageClassName' are ignored.
+  configExistingClaim: ""
+
+  # Providing both name and key will add in the PLEX_CLAIM environment variable
+  # with the correct secretKeyRef configuration
+  # Clashes with providing PLEX_CLAIM via `extraEnv` so only provide one or the other!
+  claimSecret:
+    name: ""
+    key: ""
+
+  # Enabling this will add nvidia.com/gpu: 1 to limits, and will set
+  # environment for the nvidia operator
+  gpu:
+    nvidia:
+      enabled: false
+      # -- Optional: NVIDIA GPU devices by index or UUID.
+      # Examples: "0,1", "GPU-uuid1,GPU-uuid2", or "all".
+      # See [NVIDIA docs](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/docker-specialized.html#gpu-enumeration)
+      devices: "all"
+      # -- Optional: NVIDIA driver capabilities.
+      # Available values are: `compute`, `compat32`, `graphics`, `utility`, `video`, `display`.
+      # See [NVIDIA docs](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/docker-specialized.html#driver-capabilities)
+      capabilities: "compute,video,utility"
 
   resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious
@@ -49,20 +111,61 @@ pms:
   #   cpu: 100m
   #   memory: 128Mi
 
+  # -- Security context applied to the PMS *pod*. Use this for pod-level fields
+  # such as `fsGroup`, `supplementalGroups` and `fsGroupChangePolicy`.
+  podSecurityContext: {}
 
-# A basic image that will convert the configmap to a file in the rclone config volume
+  # -- Security context applied to the PMS *container*. Use this for
+  # container-level fields such as `privileged`, `capabilities`,
+  # `readOnlyRootFilesystem` and `allowPrivilegeEscalation`.
+  securityContext: {}
+
+  # -- Enable process namespace sharing within the pod.
+  shareProcessNamespace: false
+
+  # -- Add a startup probe. This can be used to delay the liveness probe
+  # until PMS has finished DB migrations and prevent restarts.
+  startupProbe: {}
+    # httpGet:
+    #   path: /identity
+    #   port: 32400
+    # periodSeconds: 10
+    # failureThreshold: 180
+
+  # -- Add kubernetes liveness probe to pms container.
+  livenessProbe: {}
+    # httpGet:
+    #   path: /identity
+    #   port: 32400
+    # initialDelaySeconds: 60
+    # periodSeconds: 60
+    # timeoutSeconds: 1
+    # failureThreshold: 3
+
+  # -- Add kubernetes readiness probe to pms container.
+  readinessProbe: {}
+    # httpGet:
+    #   path: /identity
+    #   port: 32400
+    # initialDelaySeconds: 60
+    # periodSeconds: 60
+    # timeoutSeconds: 1
+    # failureThreshold: 3
+
+# -- A basic image that will convert the configmap to a file in the rclone config volume
 # this is ignored if rclone is not enabled
 initContainer:
   image:
+    # -- The public dockerhub registry
     registry: index.docker.io
     repository: alpine
-    # If unset use latest
-    tag: 3.18.0
+    # -- If unset use latest
+    tag: "3.24"
     sha: ""
     pullPolicy: IfNotPresent
 
-  # A custom script that will be run in an init container to do any setup before the PMS service starts up
-  # This will be run everytime the pod starts, make sure that some mechanism is included to prevent
+  # -- A custom script that will be run in an init container to do any setup before the PMS service starts up
+  # This will be run every time the pod starts, make sure that some mechanism is included to prevent
   # this from running more than once if it should only be run on the first startup.
   script: ""
   ###
@@ -85,34 +188,56 @@ initContainer:
   #
   #   echo "Done."
 
-# the settings specific to rclone
+extraInitContainers: {}
+# extraContainers:
+#  - name: <container name>
+#    args:
+#      - ...
+#    image: <docker images>
+#    imagePullPolicy: IfNotPresent
+#    resources:
+#      limits:
+#        memory: 128Mi
+#      requests:
+#        cpu: 100m
+#        memory: 128Mi
+#    volumeMounts:
+#      - ...
+
+# -- Specify your own runtime class name eg use gpu
+runtimeClassName: ""
+
+# -- The settings specific to rclone
 rclone:
-  # if the rclone sidecar should be created
+  # -- If the rclone sidecar should be created
   enabled: false
 
-  # the rclone image that should be used
+  # -- The rclone image that should be used
   image:
+    # -- The public dockerhub registry
     registry: index.docker.io
     repository: rclone/rclone
-    # If unset use latest
-    tag: 1.62.2
+    # -- If unset use latest
+    tag: 1.75.1
     sha: ""
     pullPolicy: IfNotPresent
 
-  # The name of the secret that contains the rclone configuration file.
-  # The key must be called `rclone.conf` in the secret
+  # -- The name of the secret that contains the rclone configuration file.
+  # The rclone config key must be called `rclone.conf` in the secret
+  #
+  # All keys in configSecret will be available in /etc/rclone/. This might
+  # be useful if other files are needed, such as a private key for sftp mode.
   configSecret: ""
 
-
-  # the remote drive that should be mounted using rclone
+  # -- The remote drive that should be mounted using rclone
   # this must be in the form of `name:[/optional/path]`
   # this remote will be mounted at `/data/name` in the PMS container
   remotes: []
 
-  # if the remote volumes should be mounted as read only
+  # -- If the remote volumes should be mounted as read only
   readOnly: true
 
-  # additional arguments to give to rclone when mounting the volume
+  # -- Additional arguments to give to rclone when mounting the volume
   additionalArgs: []
 
   resources: {}
@@ -132,27 +257,55 @@ nameOverride: ""
 fullnameOverride: ""
 
 serviceAccount:
-  # Specifies whether a service account should be created
+  # -- Specifies whether a service account should be created
   create: true
-  # If the service account token should be auto mounted
+  # -- If the service account token should be auto mounted
   automountServiceAccountToken: false
-  # Annotations to add to the service account
+  # -- Annotations to add to the service account
   annotations: {}
-  # The name of the service account to use.
+  # -- The name of the service account to use.
   # If not set and create is true, a name is generated using the fullname template
   name: ""
 
 statefulSet:
-  # optional extra annotations to add to the service resource
+  # -- Optional extra annotations to add to the service resource
   annotations: {}
+  # -- Optional extra annotations to add to the pods in the statefulset
+  podAnnotations: {}
 
 service:
   type: ClusterIP
   port: 32400
 
-  # optional extra annotations to add to the service resource
-  annotations: {}
+  # -- TrafficDistribution offers a way to express preferences for how traffic
+  # is distributed to Service endpoints. If the field is not set, the
+  # implementation will apply its default routing strategy. If set to
+  # "PreferSameNode" (k8s v1.35+) implementations should prioritize endpoints
+  # that are in the same zone. Clusters running k8s v1.34 or earlier should use
+  # "PreferClose" instead.
+  # trafficDistribution: PreferSameNode
 
+  # -- Deprecated: Pre-defined IP address of the PMS service.
+  # Used by cloud providers to connect the resulting load balancer service to a
+  # pre-existing static IP.
+  # Users are encouraged to use implementation-specific annotations when available instead.
+  # Ref: https://kubernetes.io/docs/concepts/services-networking/service/#loadbalancer
+  # loadBalancerIP: ""
+
+  # Port to use when type of service is "NodePort" (32400 by default)
+  # nodePort: 32400
+
+  # when NodePort is used, plex is unable to determine user IP
+  # all traffic seems to come from within the cluster
+  # setting this to 'Local' will allow Plex to determine the actual IP of user.
+  # used to determine bitrate for remote transcoding
+  # but the pods can only be accessed by the Node IP where the pod is running
+  # Read more here: https://kubernetes.io/docs/tasks/access-application-cluster/create-external-load-balancer/#preserving-the-client-source-ip
+  # https://access.redhat.com/solutions/7028639
+  # externalTrafficPolicy: Local
+
+  # -- Optional extra annotations to add to the service resource
+  annotations: {}
 
 nodeSelector: {}
 
@@ -160,36 +313,38 @@ tolerations: []
 
 affinity: {}
 
-# Common Labels for all resources created by this chart.
+priorityClassName: ""
+
+# -- Common Labels for all resources created by this chart.
 commonLabels: {}
 
 extraEnv: {}
 # extraEnv:
-  # This claim is optional, and is only used for the first startup of PMS
-  # The claim is obtained from https://www.plex.tv/claim/ is is only valid for a few minutes
+# This claim is optional, and is only used for the first startup of PMS
+# The claim is obtained from https://www.plex.tv/claim/ is is only valid for a few minutes
 #   PLEX_CLAIM: "claim"
 #   HOSTNAME: "PlexServer"
 #   TZ: "Etc/UTC"
 #   PLEX_UPDATE_CHANNEL: "5"
 #   PLEX_UID: "uid of plex user"
 #   PLEX_GID: "group id of plex user"
-  # a list of CIDRs that can use the server without authentication
-  # this is only used for the first startup of PMS
+# a list of CIDRs that can use the server without authentication
+# this is only used for the first startup of PMS
 #   ALLOWED_NETWORKS: "0.0.0.0/0"
 
-
-# Optionally specify additional volume mounts for the PMS and init containers.
+# -- Optionally specify additional volume mounts for the PMS and init containers.
 extraVolumeMounts: []
 # extraVolumeMounts:
-#   - name: some-volume-name
-#     mountPath: /path/in/container
+#   - name: dev-dri
+#     mountPath: /dev/dri
 
-
-# Optionally specify additional volumes for the pod.
+# -- Optionally specify additional volumes for the pod.
 extraVolumes: []
 # extraVolumes:
-#   - name: some-volume-name
-#     emptyDir: {}
+#   - name: dev-dri
+#     hostPath:
+#       path: /dev/dri
+#       type: Directory
 
 extraContainers: []
 # extraContainers:
@@ -206,3 +361,44 @@ extraContainers: []
 #        memory: 128Mi
 #    volumeMounts:
 #      - ...
+
+# -- Extra manifests to deploy with the release, for objects this chart does not
+# render (Gateway API policies, NetworkPolicy, ServiceMonitor, ExternalSecret,
+# ...) so they are owned by the release rather than applied by hand beside it.
+# May be a list or a map. Each entry is either a YAML object or a string; both
+# are passed through `tpl`, so entries can use the release's values and the
+# chart's named templates.
+extraManifests: []
+# extraManifests:
+#  # A config claim the release owns, with a name of its own choosing, kept
+#  # across a `helm uninstall`. Point 'pms.configExistingClaim' at the same name
+#  # so the StatefulSet mounts it instead of a volumeClaimTemplate.
+#  - |
+#    apiVersion: v1
+#    kind: PersistentVolumeClaim
+#    metadata:
+#      name: {{ .Values.pms.configExistingClaim }}
+#      labels:
+#        {{- include "pms-chart.labels" . | nindent 4 }}
+#      annotations:
+#        helm.sh/resource-policy: keep
+#    spec:
+#      accessModes:
+#        - ReadWriteOnce
+#      resources:
+#        requests:
+#          storage: {{ .Values.pms.configStorage }}
+#  # An entry given as an object rather than a string. Quote any value that
+#  # starts with a template - a bare `{{` is not valid YAML.
+#  - apiVersion: gateway.envoyproxy.io/v1alpha1
+#    kind: BackendTrafficPolicy
+#    metadata:
+#      name: '{{ include "pms-chart.fullname" . }}-compression'
+#    spec:
+#      targetRefs:
+#        - group: gateway.networking.k8s.io
+#          kind: HTTPRoute
+#          name: '{{ include "pms-chart.fullname" . }}'
+#      compressor:
+#        - type: Gzip
+#          gzip: {}

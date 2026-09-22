@@ -1,0 +1,150 @@
+name: Lint and Test Charts
+
+# yamllint disable-line rule:truthy
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    branches:
+    - master
+    paths:
+    - 'charts/plex-media-server/**'
+
+env:
+  KUBECONFORM_VERSION: v0.6.7
+  KUBE_VERSION: 1.33.0
+
+jobs:
+  chart-lint:
+    name: Chart / lint
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Set up Python
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+      with:
+        python-version: 3.x
+        check-latest: true
+
+    - name: Set up Helm
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+      with:
+        version: 4.3.0  # renovate: datasource=github-releases depName=helm packageName=helm/helm
+
+    - name: Set up Helm Chart Testing
+      uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f  # v2.8.0
+      with:
+        version: v3.14.0  # renovate: datasource=github-releases depName=chart-testing packageName=helm/chart-testing
+        yamale_version: 6.0.0  # renovate: datasource=github-releases depName=yamale packageName=23andMe/Yamale
+
+    - name: Set up Artifact Hub
+      run: |
+        curl --fail \
+          --location https://github.com/artifacthub/hub/releases/download/v1.21.0/ah_1.21.0_linux_amd64.tar.gz \
+          --output /tmp/ah.tar.gz
+        echo "48d6b87b60baf4ee8fd5efbfec3bf5fb3ca783ab3f1dab625e64332b95df2a84  /tmp/ah.tar.gz" | shasum --check
+        sudo tar --extract --file /tmp/ah.tar.gz --directory /usr/local/bin ah
+
+    - name: Set up helm-docs
+      uses: gabe565/setup-helm-docs-action@d5c35bdc9133cfbea3b671acadf50a29029e87c2  # v1.0.4
+
+    - name: Checkout source
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      with:
+        fetch-depth: 0
+
+    - name: Run chart-testing (list-changed)
+      id: list-changed
+      run: |
+        changed=$(ct list-changed --config .github/linters/ct.yaml)
+        if [[ -n "$changed" ]]; then
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Lint chart
+      if: steps.list-changed.outputs.changed == 'true'
+      run: |
+        ct lint --config .github/linters/ct.yaml
+        ah lint --path charts/plex-media-server
+
+    - name: Lint Helm docs
+      if: steps.list-changed.outputs.changed == 'true'
+      shell: bash
+      run: |
+        helm-docs --chart-search-root charts
+        git diff --exit-code charts/plex-media-server/README.md
+
+    - name: Cache kubeconform
+      id: cache-kubeconform
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      env:
+        cache-name: cache-kubeconform
+      with:
+        path: bin
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.KUBECONFORM_VERSION }}
+        restore-keys: |
+          ${{ runner.os }}-build-${{ env.cache-name }}-
+          ${{ runner.os }}-build-
+          ${{ runner.os }}-
+
+    # yamllint disable rule:line-length
+    - name: Install kubeconform
+      if: steps.cache-kubeconform.outputs.cache-hit != 'true'
+      run: |
+        mkdir -p "$GITHUB_WORKSPACE/bin"
+
+        curl -sSLO \
+          "https://github.com/yannh/kubeconform/releases/download/${{ env.KUBECONFORM_VERSION }}/kubeconform-linux-amd64.tar.gz" &&
+        tar -xf "kubeconform-linux-amd64.tar.gz" &&
+        rm "kubeconform-linux-amd64.tar.gz" &&
+        mv kubeconform "$GITHUB_WORKSPACE/bin"
+    # yamllint enable rule:line-length
+
+    - name: Setup PATH
+      run: |
+        echo "$GITHUB_WORKSPACE/bin" >> "$GITHUB_PATH"
+
+    - name: Run kubeconform
+      id: kubeconform
+      if: steps.list-changed.outputs.changed == 'true'
+      run: |
+        app=plex-media-server
+        helm template pms "charts/${app}" \
+          --namespace example \
+          --values "charts/${app}/ci/ci-values.yaml" \
+          --set 'pms.gpu.nvidia.enabled=true' |
+        kubeconform \
+          -kubernetes-version=${{ env.KUBE_VERSION }} \
+          -schema-location default \
+          -strict \
+          -output tap
+
+  chart-test:
+    name: Chart / test
+    runs-on: ubuntu-latest
+    needs:
+    - chart-lint
+
+    steps:
+    - name: Set up Python
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+      with:
+        python-version: 3.x
+        check-latest: true
+
+    - name: Set up Helm
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+
+    - name: Set up Helm Chart Testing
+      uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f  # v2.8.0
+
+    - name: Checkout source
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      with:
+        fetch-depth: 0
+
+    - name: Create kind cluster
+      uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2  # v1.15.0
+
+    - name: Run chart-testing (install)
+      run: ct install --config .github/linters/ct.yaml
